@@ -6,10 +6,11 @@
 // SET YOUR COOKIE BELOW
 
 module.exports = {
-    "Cookie": "",
+    "Cookie": "SET YOUR COOKIE HERE",
     "CookieArray": [],
-    "Cookiecounter": 0,
+    "Cookiecounter": 3,
     "CookieIndex": 0,
+    "ProxyPassword": "",
     "Ip": "127.0.0.1",
     "Port": 8444,
     "localtunnel": false,
@@ -33,10 +34,10 @@ module.exports = {
         "StripHuman": false,
         "PassParams": false,
         "ClearFlags": true,
-        "PreserveChats": true,
+        "PreserveChats": false,
         "LogMessages": true,
         "FullColon": true,
-        "padtxt": 13500,
+        "padtxt": 15000,
         "xmlPlot": true,
         "Superfetch": true
     }

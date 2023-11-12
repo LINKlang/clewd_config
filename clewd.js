@@ -7,12 +7,13 @@
 const {createServer: Server, IncomingMessage, ServerResponse} = require('node:http'), {createHash: Hash, randomUUID, randomInt, randomBytes} = require('node:crypto'), {TransformStream, ReadableStream} = require('node:stream/web'), {Readable, Writable} = require('node:stream'), {Blob} = require('node:buffer'), {existsSync: exists, writeFileSync: write, createWriteStream} = require('node:fs'), {join: joinP} = require('node:path'), {ClewdSuperfetch: Superfetch, SuperfetchAvailable} = require('./lib/clewd-superfetch'), {AI, fileName, genericFixes, bytesToSize, setTitle, checkResErr, Replacements, Main} = require('./lib/clewd-utils'), ClewdStream = require('./lib/clewd-stream');
 
 /******************************************************* */
-let currentIndex = 0, Firstlogin = true, changeflag = 0, changetime = 0, totaltime = 0, uuidOrgArray = [];
+let currentIndex, Firstlogin = true, changeflag = 0, changetime = 0, totaltime, uuidOrgArray = [];
 
 const events = require('events'), CookieChanger = new events.EventEmitter();
 require('events').EventEmitter.defaultMaxListeners = 0;
 
 CookieChanger.on('ChangeCookie', () => {
+    changeflag = 0;
     Proxy && Proxy.close();
     console.log(`Changing Cookie...\n`);
     Proxy.listen(Config.Port, Config.Ip, onListen);
@@ -21,10 +22,14 @@ CookieChanger.on('ChangeCookie', () => {
     }));
 });
 
-const simpletokenizer = (str) => {
+const CookieCleaner = () => {
+    Config.CookieArray = Config.CookieArray.filter(item => item !== Config.Cookie);
+    !process.env.Cookie && !process.env.CookieArray && writeSettings(Config);
+    currentIndex = (currentIndex - 1 + Config.CookieArray.length) % Config.CookieArray.length;
+}, simpletokenizer = (prompt) => {
     let byteLength = 0;
-    for (let i = 0; i < str.length; i++) {
-        let code = str.charCodeAt(i);
+    for (let i = 0; i < prompt.length; i++) {
+        let code = prompt.charCodeAt(i);
         if (code <= 0xFF) {
             byteLength += 0.6;
         } else if (code <= 0xFFFF) {
@@ -34,109 +39,128 @@ const simpletokenizer = (str) => {
         }
     }
     return byteLength;
-}, padJson = (json) => {
+}, padtxt = (content) => {
     if (Config.padtxt_placeholder.length > 0) {
         var placeholder = Config.padtxt_placeholder;
     } else {
         const bytes = randomInt(5, 15);
         var placeholder = randomBytes(bytes).toString('hex');
     }
-    var count = Math.floor((Config.Settings.padtxt - simpletokenizer(json)) / simpletokenizer(placeholder)); 
+    let count = Math.floor((Config.Settings.padtxt - simpletokenizer(content)) / simpletokenizer(placeholder)); 
 
     // 生成占位符字符串
-    var padding = '';
-    for (var i = 0; i < count; i++) {
+    let padding = '';
+    for (let i = 0; i < count; i++) {
         padding += placeholder;
     }
 
-    // 在json前面添加占位符, 在末尾增加空行然后添加json
-    var result = padding + '\n\n\n' + json;
+    // 在prompt前面添加占位符, 在末尾增加空行然后添加prompt
+    content = padding + '\n\n\n' + content;
 
-    result = result.replace(/^\s*/, '');
-
-    return result;
-}, AddxmlPlot = (content) => {
+    return content.trim();
+}, xmlPlot = (content) => {
     // 检查内容中是否包含"<card>"
-    if (!content.includes('<card>')) {
-        content = content.replace(/(\n\n|^)xmlPlot:\s*/gm, '$1');
-        return content.replace(/<customname>(.*?)<\/customname>/gm, '$1');
+    const card = content.includes('<card>');
+
+    //<card>越狱倒置
+    if (card) {
+        let segcontentHuman = content.split('\n\nHuman:');
+        const seglength = segcontentHuman.length;
+        if (/Assistant: *.$/.test(content) && seglength > 1 && !segcontentHuman[seglength - 2].includes('\n\nAssistant:')) {
+            segcontentHuman[seglength - 2] = segcontentHuman.splice(seglength - 1, 1, segcontentHuman[seglength - 2])[0];
+        }
+        content = segcontentHuman.join('\n\nHuman:');
     }
 
-    //群组
-    content = content.replace(/<customname>(.*?)<\/customname>/gm, '$1');
-
     //role合并
-    if (!content.includes('<\!-- Merge Disable -->')) {
-        if (!content.includes('<\!-- Merge Human Disable -->')) {
-            content = content.replace(/(\n\n|^)xmlPlot:/g, '$1Human:');
-            content = content.replace(/(?:\n\n|^)Human:(.*?(?:\n\nAssistant:|$))/gs, function(match, p1) {return '\n\nHuman:' + p1.replace(/\n\nHuman:\s*/g, '\n\n')});
+    const MergeDisable = content.includes('<\!-- Merge Disable -->');
+    const MergeHumanDisable = content.includes('<\!-- Merge Human Disable -->');
+    const MergeAssistantDisable = content.includes('<\!-- Merge Assistant Disable -->');
+    if (!MergeDisable) {
+        if (content.includes('<\!-- Merge System Disable -->') || !card) {
+            content = content.replace(/(\n\n|^\s*)xmlPlot:\s*/gm, '$1');
+        }
+        if (!MergeHumanDisable) {
+            content = content.replace(/(\n\n|^\s*)xmlPlot:/g, '$1Human:');
+            content = content.replace(/(?:\n\n|^\s*)Human:(.*?(?:\n\nAssistant:|$))/gs, function(match, p1) {return '\n\nHuman:' + p1.replace(/\n\nHuman:\s*/g, '\n\n')});
             content = content.replace(/^\s*Human:\s*/, '');
         }
-        if (!content.includes('<\!-- Merge Assistant Disable -->')) {
+        if (!MergeAssistantDisable) {
             content = content.replace(/\n\nAssistant:(.*?(?:\n\nHuman:|$))/gs, function(match, p1) {return '\n\nAssistant:' + p1.replace(/\n\nAssistant:\s*/g, '\n\n')});
         }
     }
-    content = content.replace(/(\n\n|^)xmlPlot:\s*/gm, '$1');
+    content = content.replace(/(\n\n|^\s*)xmlPlot:\s*/gm, '$1');
     content = content.replace(/<\!-- Merge.*?Disable -->/gm, '');
 
-    //格式顺序交换&越狱倒置
-    content = content.replace(/<Prev(Assistant|Human)>.*?<\/Prev\1>/gs, function(match) {return match.replace(/\n\n(Assistant|Human):/g, '\n\ntemp$1:')});
-    let segcontentAssistant = content.split('\n\nAssistant:');
-    let processedsegAssistant = segcontentAssistant.map(seg => {
-        return seg.replace(/(\n\nHuman:.*?)<PrevAssistant>(.*?)<\/PrevAssistant>/gs, '\n\n$2$1');
-    });
-    content = processedsegAssistant.join('\n\nAssistant:');
-    let segcontentHuman = content.split('\n\nHuman:');
-    const seglength = segcontentHuman.length;
-    for (let i = 1; i < seglength; i++) {
-        const match = segcontentHuman[i].match(/<PrevHuman>.*?<\/PrevHuman>/s);
-        if (match) {
-            segcontentHuman[i - 1] += match[0].replace(/<PrevHuman>(.*?)<\/PrevHuman>/s, '\n\n$1');
-            segcontentHuman[i] = segcontentHuman[i].replace(match[0], '');
+    //自定义插入
+    content = content.replace(/(<\/?)PrevAssistant>/gm, '$1@1>');
+    content = content.replace(/(<\/?)PrevHuman>/gm, '$1@2>');
+    let splitContent = content.split(/\n\n(?=Assistant:|Human:)/g);
+    let match;
+    while ((match = /<@(\d+)>(.*?)<\/@\1>/gs.exec(content)) !== null) {
+        let index = splitContent.length - parseInt(match[1]) - 1;
+        if (index >= 0) {
+            splitContent[index] += '\n\n' + match[2];
         }
+        content = content.replace(match[0], '');
     }
-    if (/Assistant: *.$/.test(content) && seglength > 1 && !segcontentHuman[seglength - 2].includes('\n\nAssistant:')) {
-        segcontentHuman[seglength - 2] = segcontentHuman.splice(seglength - 1, 1, segcontentHuman[seglength - 2])[0];
+    content = splitContent.join('\n\n');
+    content = content.replace(/<@(\d+)>.*?<\/@\1>/gs, '');
+
+    //正则
+    while ((match = /<regex>"(\/?)(.*)\1(.*)" *: *"(.*?)"<\/regex>/gm.exec(content)) !== null) {
+        try {
+            content = content.replace(new RegExp(match[2], match[3]), match[4]);
+        } catch (error) {}
+        content = content.replace(match[0], '');
     }
-    content = segcontentHuman.join('\n\nHuman:');
-    content = content.replace(/\n\ntemp(Assistant|Human):/g, '\n\n$1:');
+    content = content.replace(/(\r\n|\r|\\n)/gm, '\n');
 
-    //给开头加上</file-attachment-contents>用于截断附加文件标识
-    content.includes('<file-attachment-contents>') && (content = '</file-attachment-contents>\n\n' + content);
-
-    // 在第一个"[Start a new"前面加上"<example>"，在最后一个"[Start a new"前面加上"</example>"
-    const exampleNote = content.match(/(?<=<example-note>).*(?=<\/example-note>)/) || '';
-    const cardtag = content.match(/(?=\n\n<\/card>)/) || '</card>';
-    const exampletag = content.match(/(?=\n\n<\/example>)/) || '</example>';
-    content = content.replace(/<example-note>.*<\/example-note>/, '');
-    const firstChatStart = content.indexOf('\n\n[Start a new');
-    const lastChatStart = content.lastIndexOf('\n\n[Start a new');
-    firstChatStart != -1 && firstChatStart === lastChatStart && (content = content.slice(0, firstChatStart) + `\n\n${cardtag}` + content.slice(firstChatStart));
-    firstChatStart != lastChatStart && (content = content.slice(0, firstChatStart) + `\n\n${cardtag}\n\n${exampleNote}\n<example>` + content.slice(firstChatStart, lastChatStart) + `\n\n${exampletag}` + content.slice(lastChatStart));
-    
-    // 之后的第一个"Assistant: "之前插入"\n\n<plot>"
-    const lastChatIndex = content.lastIndexOf('\n\n[Start a new');
-    if (lastChatIndex != -1 && content.includes('</plot>')) { 
-        const assistantIndex = content.indexOf('\n\nAssistant:', lastChatIndex);
-        assistantIndex != -1 && (content = content.slice(0, assistantIndex) + '\n\n<plot>' + content.slice(assistantIndex));
+    //二次role合并
+    if (!MergeDisable) {
+        if (!MergeHumanDisable) {
+            content = content.replace(/(?:\n\n|^\s*)Human:(.*?(?:\n\nAssistant:|$))/gs, function(match, p1) {return '\n\nHuman:' + p1.replace(/\n\nHuman:\s*/g, '\n\n')});
+        }
+        if (!MergeAssistantDisable) {
+            content = content.replace(/\n\nAssistant:(.*?(?:\n\nHuman:|$))/gs, function(match, p1) {return '\n\nAssistant:' + p1.replace(/\n\nAssistant:\s*/g, '\n\n')});
+        }
     }
 
     //Plain Prompt
-    segcontentHuman = content.split('\n\nHuman:');
+    let segcontentHuman = content.split('\n\nHuman:');
     let segcontentlastIndex = segcontentHuman.length - 1;
     if (segcontentlastIndex >= 2 && segcontentHuman[segcontentlastIndex].includes('<!-- Plain Prompt Enable -->') && !content.includes('\n\nPlainPrompt:')) {
         content = segcontentHuman.slice(0, segcontentlastIndex).join('\n\nHuman:') + '\n\nPlainPrompt:' + segcontentHuman.slice(segcontentlastIndex).join('\n\nHuman:');
     }
-    content = content.replace(/<\!-- Plain Prompt Enable -->/, '');
-    content = content.replace(/\n\nHuman:.*PlainPrompt:/, '\n\nPlainPrompt:');
+    content = content.replace(/<\!-- Plain Prompt Enable -->/gm, '');
+    content = content.replace(/\n\nHuman: *PlainPrompt:/, '\n\nPlainPrompt:');
 
-    //消除空XML tags或多余的\n
-    content = content.replace(/(\n)<\/hidden>\n+?<hidden>\n/g, '');
-    content = content.replace(/(?:<!--.*?-->)?\n<(card|example|hidden)>\n+?<\/\1>/g, '');
-    content = content.replace(/(?<=\n<(card|hidden|example)>\n)\s*/g, '');
-    content = content.replace(/\s*(?=\n<\/(card|hidden|example)>(\n|$))/g, '');
+    //<card>群组
+    if (!card) {
+        content = content.replace(/(<reply>\n|\n<\/reply>)/g, '');
+        return content.replace(/<customname>(.*?)<\/customname>/gm, '$1');
+    } else {
+        content = content.replace(/(<reply>\n|\n<\/reply>)\1*/g, '$1');
+        content = content.replace(/<customname>(.*?)<\/customname>:/gm, '$1:\n');
+    }
+
+    //<card>在第一个"[Start a new"前面加上"<example>"，在最后一个"[Start a new"前面加上"</example>\n\n<plot>\n\n"
+    const cardtag = content.match(/(?=\n\n<\/card>)/) || '</card>';
+    const exampletag = content.match(/(?=\n\n<\/example>)/) || '</example>';
+    const plot = content.includes('</plot>') ? '<plot>' : '';
+    const firstChatStart = content.indexOf('\n\n[Start a new');
+    const lastChatStart = content.lastIndexOf('\n\n[Start a new');
+    firstChatStart != -1 && firstChatStart === lastChatStart && (content = content.slice(0, firstChatStart) + `\n\n${cardtag}` + content.slice(firstChatStart));
+    firstChatStart != lastChatStart && (content = content.slice(0, firstChatStart) + `\n\n${cardtag}\n<example>` + content.slice(firstChatStart, lastChatStart) + `\n\n${exampletag}\n\n${plot}` + content.slice(lastChatStart));
+    
+    //<card>消除空XML tags、两端空白符和多余的\n
+    content = content.replace(/\s*<\|curtail\|>\s*/g, '\n');
+    content = content.replace(/\n<\/(card|hidden|META)>\s+?<\1>\n/g, '\n');
+    content = content.replace(/\n<(\/?card|example|hidden|plot|META)>\s+?<\1>/g, '\n<$1>');
+    content = content.replace(/(?:<!--.*?-->)?\n<(card|example|hidden|plot|META)>\s+?<\/\1>/g, '');
+    content = content.replace(/(?<=(: |\n)<(card|hidden|example|plot|META|EOT)>\n)\s*/g, '');
+    content = content.replace(/\s*(?=\n<\/(card|hidden|example|plot|META|EOT)>(\n|$))/g, '');
     content = content.replace(/(?<=\n)\n(?=\n)/g, '');
-
     return content.trim();
 };
 /******************************************************* */
@@ -152,8 +176,9 @@ const ConfigPath = joinP(__dirname, './config.js'), LogPath = joinP(__dirname, '
 let uuidOrg, curPrompt = {}, prevPrompt = {}, prevMessages = [], prevImpersonated = false, Config = {
     Cookie: '',
     CookieArray: [],
-    Cookiecounter: 0,
+    Cookiecounter: 3,
     CookieIndex: 0,
+    ProxyPassword: '',
     Ip: (process.env.Cookie || process.env.CookieArray) ? '0.0.0.0' : '127.0.0.1',
     Port: process.env.PORT || 8444,
     localtunnel: false,
@@ -177,10 +202,10 @@ let uuidOrg, curPrompt = {}, prevPrompt = {}, prevMessages = [], prevImpersonate
         StripHuman: false,
         PassParams: false,
         ClearFlags: true,
-        PreserveChats: true,
+        PreserveChats: false,
         LogMessages: true,
         FullColon: true,
-        padtxt: 13500,
+        padtxt: 15000,
         xmlPlot: true,
         Superfetch: true
     }
@@ -255,15 +280,16 @@ const updateParams = res => {
         currentIndex = (currentIndex + 1) % Config.CookieArray.length;
         changetime += 1;
     }
-    let percentage = ((changetime + Config.CookieIndex) / totaltime) * 100
-    if (percentage > 100) {
-        console.log(`\n\n※※※Cookie cleanup completed※※※\n\n`);
+    let percentage = ((changetime + Math.max(Config.CookieIndex - 1, 0)) / totaltime) * 100
+    if (Config.Cookiecounter < 0 && percentage > 100) {
+        console.log(`\n※※※Cookie cleanup completed※※※\n\n`);
         return process.exit();
     }
 /***************************** */
     if ('SET YOUR COOKIE HERE' === Config.Cookie || Config.Cookie?.length < 1) {
         throw Error('Set your cookie inside config.js');
     }
+    !/^sessionKey=/.test(Config.Cookie) && (Config.Cookie += 'sessionKey='); //
     updateCookies(Config.Cookie);
     //console.log(`[2m${Main}[0m\n[33mhttp://${Config.Ip}:${Config.Port}/v1[0m\n\n${Object.keys(Config.Settings).map((setting => UnknownSettings.includes(setting) ? `??? [31m${setting}: ${Config.Settings[setting]}[0m` : `[1m${setting}:[0m ${ChangedSettings.includes(setting) ? '[33m' : '[36m'}${Config.Settings[setting]}[0m`)).sort().join('\n')}\n`);
     //Config.Settings.Superfetch && SuperfetchAvailable(true);
@@ -276,9 +302,7 @@ const updateParams = res => {
     });
 /**************************** */
     if (accRes.statusText === 'Forbidden' && Config.CookieArray?.length > 0) {
-        Config.CookieArray = Config.CookieArray.filter(item => item !== Config.Cookie);
-        !process.env.Cookie && !process.env.CookieArray && writeSettings(Config);
-        currentIndex = (currentIndex - 1 + Config.CookieArray.length) % Config.CookieArray.length;
+        CookieCleaner();
         console.log(`[31mExpired![0m`);
         Config.Cookiecounter < 0 && console.log(`[progress]: [32m${percentage.toFixed(2)}%[0m\n[length]: [33m${Config.CookieArray.length}[0m\n`);
         CookieChanger.emit('ChangeCookie');
@@ -295,38 +319,58 @@ const updateParams = res => {
     }
     setTitle('ok');
     updateParams(accRes);
+/**************************** */
+    const accountRes = await fetch(Config.rProxy + '/api/auth/current_account', {
+        method: 'GET',
+        headers: {
+            ...AI.hdr(),
+            Cookie: getCookies()
+        }
+    });
+    await checkResErr(accountRes);
+    const accountInfo = (await accountRes.json());
+/**************************** */
     console.log(Config.CookieArray?.length > 0 ? `(index: [36m${currentIndex || Config.CookieArray.length}[0m) Logged in %o` : 'Logged in %o', { //console.log('Logged in %o', {
         name: accInfo.name?.split('@')?.[0],
+        mail: accountInfo.account.email_address, //
         capabilities: accInfo.capabilities,
     });
     uuidOrg = accInfo?.uuid;
 /************************* */
-    if (uuidOrgArray.includes(uuidOrg)) {
-        console.log(`[31mOverlap![0m`);
-        currentIndex = (currentIndex - 1 + Config.CookieArray.length) % Config.CookieArray.length;
-        Config.Cookiecounter < 0 && console.log(`[progress]: [32m${percentage.toFixed(2)}%[0m\n[length]: [33m${Config.CookieArray.length}[0m\n`);
-        Config.CookieArray = Config.CookieArray.filter(item => item !== Config.Cookie);
-        !process.env.Cookie && !process.env.CookieArray && writeSettings(Config);
-        CookieChanger.emit('ChangeCookie');
-        return;
-    } else {
-        uuidOrgArray.push(uuidOrg);
+    const Overlap = uuidOrgArray.includes(uuidOrg) && percentage <= 100 && Config.CookieArray?.length > 0;
+    !Overlap && uuidOrgArray.push(uuidOrg);
+    const Unverified = !accountInfo.account.completed_verification_at;
+    const abuseTag = accountInfo.account.statsig.values.feature_gates["4fDxNAVXgvks8yzKUoU+T+w3Qr3oYVqoJJVNYh04Mik="]?.secondary_exposures[0];
+    const Banned = abuseTag.gateValue === 'true' && abuseTag.gate === 'segment:abuse';
+    const Remain = accountInfo.messageLimit?.remaining;
+    const Exceededlimit = (accountInfo.messageLimit?.type === 'approaching_limit' && Remain === 0) || accountInfo.messageLimit?.type === 'exceeded_limit';
+    if (Remain) {
+        changeflag = Math.max(Config.Cookiecounter - Remain, changeflag);
+        console.log(`[33mApproachingLimit!: Remain ${Remain}[0m`);
     }
-/************************* */    
+    if ((Overlap || Unverified || Banned) && Config.CookieArray?.length > 0) {
+        Overlap ? console.log(`[31mOverlap![0m`) : Unverified ? console.log(`[31mUnverified![0m`) : Banned && console.log(`[31mBanned![0m`);
+        CookieCleaner();
+        Config.Cookiecounter < 0 && console.log(`[progress]: [32m${percentage.toFixed(2)}%[0m\n[length]: [33m${Config.CookieArray.length}[0m\n`);
+        return CookieChanger.emit('ChangeCookie');
+    }
+/************************* */
     if (accInfo?.active_flags.length > 0) {
+        let flagtype; //
         const now = new Date, formattedFlags = accInfo.active_flags.map((flag => {
             const days = ((new Date(flag.expires_at).getTime() - now.getTime()) / 864e5).toFixed(2);
+            flagtype = flag.type; //
             return {
                 type: flag.type,
                 remaining_days: days
             };
         }));
-        console.warn('[35mYour account has warnings[0m %o', formattedFlags); //console.warn('[31mYour account has warnings[0m %o', formattedFlags);
+        console.warn(`${'consumer_banned' === flagtype ? '[31m' : '[35m'}Your account has warnings[0m %o`, formattedFlags); //console.warn('[31mYour account has warnings[0m %o', formattedFlags);
         await Promise.all(accInfo.active_flags.map((flag => (async type => {
             if (!Config.Settings.ClearFlags) {
                 return;
             }
-            if ('consumer_restricted_mode' === type) {
+            if ('consumer_restricted_mode' === type || 'consumer_banned' === type) { //if ('consumer_restricted_mode' === type) {
                 return;
             }
             const req = await (Config.Settings.Superfetch ? Superfetch : fetch)(`${Config.rProxy}/api/organizations/${uuidOrg}/flags/${type}/dismiss`, {
@@ -342,41 +386,18 @@ const updateParams = res => {
         })(flag.type))));
 /***************************** */
         if (Config.CookieArray?.length > 0) {
-            console.log(`[35mRestricted![0m`);
+            console.log(`${'consumer_banned' === flagtype ? '[31mBanned' : '[35mRestricted'}![0m`);
+            'consumer_banned' === flagtype && CookieCleaner();
             Config.Cookiecounter < 0 && console.log(`[progress]: [32m${percentage.toFixed(2)}%[0m\n[length]: [33m${Config.CookieArray.length}[0m\n`);
-            CookieChanger.emit('ChangeCookie');
-            return;
+            return CookieChanger.emit('ChangeCookie');
         }
     }
-    if (Config.CookieArray.length > 0) {
-        const allres = await fetch(`${Config.rProxy}`, {
-            headers: {
-                ...AI.hdr(),
-                Cookie: getCookies()
-            },
-            method: 'GET'
-        }), accountinfo = await allres.text();
-        updateParams(allres);
-        const Unverified = accountinfo.includes('\\"completed_verification_at\\":null');
-        const Banned = accountinfo.includes('\\"gate\":\\"segment:abuse\\",\\"gateValue\\":\\"true\\",');
-        const Exceededlimit = /\\"messageLimit\\":{\\"type\\":\\"(approaching_limit\\",\\"remaining\\":0|exceeded_limit)\\",/.test(accountinfo);
-        if (Unverified || Banned) {
-            Config.CookieArray = Config.CookieArray.filter(item => item !== Config.Cookie);
-            !process.env.Cookie && !process.env.CookieArray && writeSettings(Config);
-            currentIndex = (currentIndex - 1 + Config.CookieArray.length) % Config.CookieArray.length;
-            if (Unverified) {
-                console.log(`[31mUnverified![0m`);
-            } else {
-                console.log(`[31mBanned![0m`);
-            }
-        }
-        Exceededlimit && console.log(`[35mExceeded limit![0m`);
-        Config.Cookiecounter < 0 && console.log(`[progress]: [32m${percentage.toFixed(2)}%[0m\n[length]: [33m${Config.CookieArray.length}[0m\n`);
-        if (Unverified || Banned || Exceededlimit || Config.Cookiecounter < 0) {
-            console.log('');
-            CookieChanger.emit('ChangeCookie');
-            return;
-        }
+    if (Config.Cookiecounter < 0) {
+        console.log(`[progress]: [32m${percentage.toFixed(2)}%[0m\n[length]: [33m${Config.CookieArray.length}[0m\n`);
+        return CookieChanger.emit('ChangeCookie');
+    } else if (Exceededlimit) {
+        console.log(`[35mExceeded limit![0m\n`);
+        return CookieChanger.emit('ChangeCookie');
 /***************************** */
     }
     const convRes = await fetch(`${Config.rProxy}/api/organizations/${uuidOrg}/chat_conversations`, {
@@ -387,7 +408,16 @@ const updateParams = res => {
         }
     }), conversations = await convRes.json();
     updateParams(convRes);
-    conversations.length > 0 && await Promise.all(conversations.map((conv => deleteChat(conv.uuid))));
+    //conversations.length > 0 && await Promise.all(conversations.map((conv => deleteChat(conv.uuid))));
+/************************* */
+    if (conversations.length > 0) {
+        try {
+            await Promise.all(conversations.map((conv => deleteChat(conv.uuid))));
+        } catch (err) {
+            console.log(`[33mdeleteChat failed[0m`);
+        }
+    }
+/************************* */
 }, writeSettings = async (config, firstRun = false) => {
     write(ConfigPath, `/*\n* https://rentry.org/teralomaniac_clewd\n* https://github.com/teralomaniac/clewd\n*/\n\n// SET YOUR COOKIE BELOW\n\nmodule.exports = ${JSON.stringify(config, null, 4)}\n\n/*\n BufferSize\n * How many characters will be buffered before the AI types once\n * lower = less chance of \`PreventImperson\` working properly\n\n ---\n\n SystemInterval\n * How many messages until \`SystemExperiments alternates\`\n\n ---\n\n Other settings\n * https://gitgud.io/ahsk/clewd/#defaults\n * and\n * https://gitgud.io/ahsk/clewd/-/blob/master/CHANGELOG.md\n */`.trim().replace(/((?<!\r)\n|\r(?!\n))/g, '\r\n'));
     if (firstRun) {
@@ -430,6 +460,12 @@ const updateParams = res => {
                 try {
                     const body = JSON.parse(Buffer.concat(buffer).toString()), temperature = Math.max(.1, Math.min(1, body.temperature));
                     let {messages} = body;
+/************************* */
+                    const kHeaders = Object.getOwnPropertySymbols(req).find(symbol => symbol.toString() === 'Symbol(kHeaders)');
+                    if (Config.ProxyPassword != '' && req[kHeaders]?.authorization != 'Bearer ' + Config.ProxyPassword) {
+                        throw Error('ProxyPassword Wrong');
+                    }
+/************************* */
                     if (messages?.length < 1) {
                         throw Error('Select OpenAI as completion source');
                     }
@@ -634,7 +670,7 @@ const updateParams = res => {
                             if (Config.Settings.xmlPlot) {
                                 idx > 0 && (spacing = '\n\n');
                                 const prefix = message.customname ? message.role + ': <customname>' + message.name + '</customname>: ' : 'system' !== message.role || message.name ? Replacements[message.name || message.role] + ': ' : 'xmlPlot: ' + Replacements[message.role];
-                                return `${spacing}${prefix}${message.content}`;
+                                return `${spacing}${prefix}${message.customname ? '<reply>\n' + message.content.trim() + '\n</reply>' : message.content}`;
                             } else {
 /****************************************************************/
                                 idx > 0 && (spacing = systemMessages.includes(message) ? '\n' : '\n\n');
@@ -643,24 +679,24 @@ const updateParams = res => {
                             } //
                         }));
                         return {
-                            prompt: genericFixes(prompt.join('')).trim(),
+                            prompt: prompt.join('').trim(),//genericFixes(prompt.join('')).trim(),
                             systems
                         };
                     })(messages, type);
                     console.log(`${model} [[2m${type}[0m]${!retryRegen && systems.length > 0 ? ' ' + systems.join(' [33m/[0m ') : ''}`);
                     'R' !== type || prompt || (prompt = '...regen...');
 /****************************************************************/
-                    Config.Settings.xmlPlot && (prompt = AddxmlPlot(prompt));
-                    Config.Settings.FullColon && (prompt = prompt.replace(/(?<=\n\n(H(?:uman)?|A(?:ssistant)?|[Ss]ystem)):[ ]?/g, '： '));
-                    Config.Settings.padtxt && (prompt = padJson(prompt));
+                    prompt = Config.Settings.xmlPlot ? xmlPlot(prompt) : genericFixes(prompt);
+                    Config.Settings.FullColon && (prompt = prompt.replace(/(?<=\n\n(H(?:uman)?|A(?:ssistant)?)):[ ]?/g, '： '));
+                    Config.Settings.padtxt && (prompt = padtxt(prompt));
 /****************************************************************/
                     Logger?.write(`\n\n-------\n[${(new Date).toLocaleString()}]\n####### PROMPT (${type}):\n${prompt}\n--\n####### REPLY:\n`);
                     retryRegen || (fetchAPI = await (async (signal, model, prompt, temperature, type) => {
                         const attachments = [];
                         if (Config.Settings.PromptExperiments) {
 /****************************************************************/
-                            let splitprompt = prompt.split('\n\nPlainPrompt:');
-                            prompt = splitprompt[0];
+                            let splitedprompt = prompt.split('\n\nPlainPrompt:');
+                            prompt = splitedprompt[0];
 /****************************************************************/
                             attachments.push({
                                 extracted_content: (prompt),
@@ -669,9 +705,9 @@ const updateParams = res => {
                                 file_type: 'txt'  //'text/plain'
                             });
                             prompt = 'r' === type ? Config.PromptExperimentFirst : Config.PromptExperimentNext;
-/****************************************************************/                            
-                            splitprompt.length > 1 && (prompt = prompt + splitprompt[1]);
-/****************************************************************/                            
+/****************************************************************/
+                            splitedprompt.length > 1 && (prompt = prompt + splitedprompt[1]);
+/****************************************************************/
                         }
                         let res;
                         const body = {
@@ -701,7 +737,7 @@ const updateParams = res => {
                             headers
                         });
                         updateParams(res);
-                        await checkResErr(res);
+                        await checkResErr(res, CookieChanger); //await checkResErr(res);
                         return res;
                     })(signal, model, prompt, temperature, type));
                     const response = Writable.toWeb(res);
@@ -731,14 +767,13 @@ const updateParams = res => {
                         });
                     }
                 }
-                clearInterval(titleTimer);              
+                clearInterval(titleTimer);
                 if (clewdStream) {
                     clewdStream.censored && console.warn('[33mlikely your account is hard-censored[0m');
                     prevImpersonated = clewdStream.impersonated;
                     setTitle('ok ' + bytesToSize(clewdStream.size));
-                    //console.log(`${200 == fetchAPI.status ? '[32m' : '[33m'}${fetchAPI.status}![0m\n`);
-/******************************** */                    
-                    429 == fetchAPI.status ? console.log(`[35mExceeded limit![0m\n`) : console.log(`${200 == fetchAPI.status ? '[32m' : '[33m'}${fetchAPI.status}![0m\n`);
+                    429 == fetchAPI.status ? console.log(`[35mExceeded limit![0m\n`) : console.log(`${200 == fetchAPI.status ? '[32m' : '[33m'}${fetchAPI.status}![0m\n`); //console.log(`${200 == fetchAPI.status ? '[32m' : '[33m'}${fetchAPI.status}![0m\n`);
+/******************************** */
                     changeflag += 1;
                     if (Config.CookieArray?.length > 0 && (429 == fetchAPI.status || (Config.Cookiecounter && changeflag >= Config.Cookiecounter))) {
                         changeflag = 0;
@@ -747,12 +782,13 @@ const updateParams = res => {
 /******************************** */
                     clewdStream.empty();
                 }
-                if (prevImpersonated) {
-                    try {
-                        await deleteChat(Conversation.uuid);
-                    } catch (err) {}
-                }
 /******************************** */
+                //if (prevImpersonated) {
+                try {
+                    await deleteChat(Conversation.uuid);
+                } catch (err) { //}
+                    console.log(`[33mdeleteChat failed[0m`);
+                }
                 changer && CookieChanger.emit('ChangeCookie');
 /******************************** */
             }));
@@ -768,15 +804,20 @@ const updateParams = res => {
         break;
 
       default:
-        req.url !== '/' && (console.log('unknown request: ' + req.url)); //console.log('unknown request: ' + req.url);
-        res.json({
+        !['/', '/v1', '/favicon.ico'].includes(req.url) && (console.log('unknown request: ' + req.url)); //console.log('unknown request: ' + req.url);
+        res.writeHead(200, {'Content-Type': 'text/html'});
+        const homepage = `<!DOCTYPE html>\n<html>\n<head>\n<meta charset="utf-8">\n<script>\nfunction copyToClipboard(text) {\n  var textarea = document.createElement("textarea");\n  textarea.textContent = text;\n  textarea.style.position = "fixed";\n  document.body.appendChild(textarea);\n  textarea.select();\n  try {\n    return document.execCommand("copy");\n  } catch (ex) {\n    console.warn("Copy to clipboard failed.", ex);\n    return false;\n  } finally {\n    document.body.removeChild(textarea);\n  }\n}\nfunction copyLink(event) {\n  event.preventDefault();\n  const url = new URL(window.location.href);\n  const link = url.protocol + '//' + url.host + '/v1';\n  copyToClipboard(link);\n  alert('链接已复制: ' + link);\n}\n</script>\n</head>\n<body>\n${Main}<br/><br/>完全开源、免费且禁止商用<br/><br/>反代地址: <a href="v1" onclick="copyLink(event)">点击复制</a><br/><br/>教程与FAQ: <a href="https://rentry.org/teralomaniac_clewd" target="FAQ">https://rentry.org/teralomaniac_clewd</a>\n</body>\n</html>`;
+        res.write(homepage);
+        res.end();
+        /*res.json(
+            {
             error: {
                 message: '404 Not Found',
                 type: 404,
                 param: null,
                 code: 404
             }
-        }, 200);
+        }, 404);*/
     }
 }));
 
@@ -834,6 +875,7 @@ const updateParams = res => {
     Config.rProxy.endsWith('/') && (Config.rProxy = Config.rProxy.slice(0, -1));
     let uniqueArr = [], seen = new Set();
     for (let Cookie of Config.CookieArray) {
+        !/^sessionKey=/.test(Cookie) && (Cookie += 'sessionKey=');
         if (!seen.has(Cookie)) {
             uniqueArr.push(Cookie);
             seen.add(Cookie);
