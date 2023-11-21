@@ -7,7 +7,7 @@
 const {createServer: Server, IncomingMessage, ServerResponse} = require('node:http'), {createHash: Hash, randomUUID, randomInt, randomBytes} = require('node:crypto'), {TransformStream, ReadableStream} = require('node:stream/web'), {Readable, Writable} = require('node:stream'), {Blob} = require('node:buffer'), {existsSync: exists, writeFileSync: write, createWriteStream} = require('node:fs'), {join: joinP} = require('node:path'), {ClewdSuperfetch: Superfetch, SuperfetchAvailable} = require('./lib/clewd-superfetch'), {AI, fileName, genericFixes, bytesToSize, setTitle, checkResErr, Replacements, Main} = require('./lib/clewd-utils'), ClewdStream = require('./lib/clewd-stream');
 
 /******************************************************* */
-let currentIndex, Firstlogin = true, changeflag = 0, changetime = 0, totaltime, uuidOrgArray = [];
+let currentIndex, Firstlogin = true, changeflag = 0, changetime = 0, totaltime, uuidOrgArray = [], model;
 
 const events = require('events'), CookieChanger = new events.EventEmitter();
 require('events').EventEmitter.defaultMaxListeners = 0;
@@ -26,42 +26,19 @@ const CookieCleaner = () => {
     Config.CookieArray = Config.CookieArray.filter(item => item !== Config.Cookie);
     !process.env.Cookie && !process.env.CookieArray && writeSettings(Config);
     currentIndex = (currentIndex - 1 + Config.CookieArray.length) % Config.CookieArray.length;
-}, simpletokenizer = (prompt) => {
-    let byteLength = 0;
-    for (let i = 0; i < prompt.length; i++) {
-        let code = prompt.charCodeAt(i);
-        if (code <= 0xFF) {
-            byteLength += 0.6;
-        } else if (code <= 0xFFFF) {
-            byteLength += 1;
-        } else {
-            byteLength += 1.5;
-        }
-    }
-    return byteLength;
-}, padtxt = (content) => {
-    if (Config.padtxt_placeholder.length > 0) {
-        var placeholder = Config.padtxt_placeholder;
-    } else {
-        const bytes = randomInt(5, 15);
-        var placeholder = randomBytes(bytes).toString('hex');
-    }
-    let count = Math.floor((Config.Settings.padtxt - simpletokenizer(content)) / simpletokenizer(placeholder)); 
-
-    // 生成占位符字符串
+}, padtxt = content => {
+    const {encode} = require('gpt-tokenizer');
+    const placeholder = Config.padtxt_placeholder || randomBytes(randomInt(5, 15)).toString('hex');
+    let count = Math.floor(Math.max(1000, Math.floor(Config.Settings.padtxt - encode(content).length)) / encode(placeholder).length); 
     let padding = '';
     for (let i = 0; i < count; i++) {
         padding += placeholder;
     }
-
-    // 在prompt前面添加占位符, 在末尾增加空行然后添加prompt
     content = padding + '\n\n\n' + content;
-
     return content.trim();
-}, xmlPlot = (content) => {
+}, xmlPlot = content => {
     // 检查内容中是否包含"<card>"
     const card = content.includes('<card>');
-
     //<card>越狱倒置
     if (card) {
         let segcontentHuman = content.split('\n\nHuman:');
@@ -71,7 +48,6 @@ const CookieCleaner = () => {
         }
         content = segcontentHuman.join('\n\nHuman:');
     }
-
     //role合并
     const MergeDisable = content.includes('<\!-- Merge Disable -->');
     const MergeHumanDisable = content.includes('<\!-- Merge Human Disable -->');
@@ -91,7 +67,6 @@ const CookieCleaner = () => {
     }
     content = content.replace(/(\n\n|^\s*)xmlPlot:\s*/gm, '$1');
     content = content.replace(/<\!-- Merge.*?Disable -->/gm, '');
-
     //自定义插入
     content = content.replace(/(<\/?)PrevAssistant>/gm, '$1@1>');
     content = content.replace(/(<\/?)PrevHuman>/gm, '$1@2>');
@@ -106,7 +81,6 @@ const CookieCleaner = () => {
     }
     content = splitContent.join('\n\n');
     content = content.replace(/<@(\d+)>.*?<\/@\1>/gs, '');
-
     //正则
     while ((match = /<regex>"(\/?)(.*)\1(.*)" *: *"(.*?)"<\/regex>/gm.exec(content)) !== null) {
         try {
@@ -115,7 +89,6 @@ const CookieCleaner = () => {
         content = content.replace(match[0], '');
     }
     content = content.replace(/(\r\n|\r|\\n)/gm, '\n');
-
     //二次role合并
     if (!MergeDisable) {
         if (!MergeHumanDisable) {
@@ -125,7 +98,6 @@ const CookieCleaner = () => {
             content = content.replace(/\n\nAssistant:(.*?(?:\n\nHuman:|$))/gs, function(match, p1) {return '\n\nAssistant:' + p1.replace(/\n\nAssistant:\s*/g, '\n\n')});
         }
     }
-
     //Plain Prompt
     let segcontentHuman = content.split('\n\nHuman:');
     let segcontentlastIndex = segcontentHuman.length - 1;
@@ -134,7 +106,6 @@ const CookieCleaner = () => {
     }
     content = content.replace(/<\!-- Plain Prompt Enable -->/gm, '');
     content = content.replace(/\n\nHuman: *PlainPrompt:/, '\n\nPlainPrompt:');
-
     //<card>群组
     if (!card) {
         content = content.replace(/(<reply>\n|\n<\/reply>)/g, '');
@@ -143,7 +114,6 @@ const CookieCleaner = () => {
         content = content.replace(/(<reply>\n|\n<\/reply>)\1*/g, '$1');
         content = content.replace(/<customname>(.*?)<\/customname>:/gm, '$1:\n');
     }
-
     //<card>在第一个"[Start a new"前面加上"<example>"，在最后一个"[Start a new"前面加上"</example>\n\n<plot>\n\n"
     const cardtag = content.match(/(?=\n\n<\/card>)/) || '</card>';
     const exampletag = content.match(/(?=\n\n<\/example>)/) || '</example>';
@@ -152,7 +122,6 @@ const CookieCleaner = () => {
     const lastChatStart = content.lastIndexOf('\n\n[Start a new');
     firstChatStart != -1 && firstChatStart === lastChatStart && (content = content.slice(0, firstChatStart) + `\n\n${cardtag}` + content.slice(firstChatStart));
     firstChatStart != lastChatStart && (content = content.slice(0, firstChatStart) + `\n\n${cardtag}\n<example>` + content.slice(firstChatStart, lastChatStart) + `\n\n${exampletag}\n\n${plot}` + content.slice(lastChatStart));
-    
     //<card>消除空XML tags、两端空白符和多余的\n
     content = content.replace(/\s*<\|curtail\|>\s*/g, '\n');
     content = content.replace(/\n<\/(card|hidden|META)>\s+?<\1>\n/g, '\n');
@@ -337,6 +306,15 @@ const updateParams = res => {
     });
     uuidOrg = accInfo?.uuid;
 /************************* */
+    model = accountInfo.account.statsig.values.dynamic_configs["6zA9wvTedwkzjLxWy9PVe7yydI00XDQ6L5Fejjq/2o8="]?.value?.model;
+    model === 'claude-2.0-magenta' && console.log(`[33mMagenta![0m`);
+    if (model != 'claude-2.0-magenta' && Config.Cookiecounter === -201) {
+        CookieCleaner();
+        return CookieChanger.emit('ChangeCookie');
+    } else if (model != 'claude-2' && Config.Cookiecounter === -2) {
+        CookieCleaner();
+        return CookieChanger.emit('ChangeCookie');
+    }
     const Overlap = uuidOrgArray.includes(uuidOrg) && percentage <= 100 && Config.CookieArray?.length > 0;
     !Overlap && uuidOrgArray.push(uuidOrg);
     const Unverified = !accountInfo.account.completed_verification_at;
@@ -496,7 +474,7 @@ const updateParams = res => {
                         console.log('[33mhaving[0m [1mAllSamples[0m and [1mNoSamples[0m both set to true is not supported');
                         throw Error('Only one can be used at the same time: AllSamples/NoSamples');
                     }
-                    const model = AI.mdl();
+                    //const model = AI.mdl();
                     curPrompt = {
                         firstUser: messages.find((message => 'user' === message.role)),
                         firstSystem: messages.find((message => 'system' === message.role)),
@@ -666,13 +644,13 @@ const updateParams = res => {
                                 return message.content;
                             }
                             let spacing = '';
-/****************************************************************/
+/******************************** */
                             if (Config.Settings.xmlPlot) {
                                 idx > 0 && (spacing = '\n\n');
                                 const prefix = message.customname ? message.role + ': <customname>' + message.name + '</customname>: ' : 'system' !== message.role || message.name ? Replacements[message.name || message.role] + ': ' : 'xmlPlot: ' + Replacements[message.role];
                                 return `${spacing}${prefix}${message.customname ? '<reply>\n' + message.content.trim() + '\n</reply>' : message.content}`;
                             } else {
-/****************************************************************/
+/******************************** */
                                 idx > 0 && (spacing = systemMessages.includes(message) ? '\n' : '\n\n');
                                 const prefix = message.customname ? message.name + ': ' : 'system' !== message.role || message.name ? Replacements[message.name || message.role] + ': ' : '' + Replacements[message.role];
                                 return `${spacing}${message.strip ? '' : prefix}${'system' === message.role ? message.content : message.content.trim()}`;
@@ -685,19 +663,19 @@ const updateParams = res => {
                     })(messages, type);
                     console.log(`${model} [[2m${type}[0m]${!retryRegen && systems.length > 0 ? ' ' + systems.join(' [33m/[0m ') : ''}`);
                     'R' !== type || prompt || (prompt = '...regen...');
-/****************************************************************/
+/******************************** */
                     prompt = Config.Settings.xmlPlot ? xmlPlot(prompt) : genericFixes(prompt);
                     Config.Settings.FullColon && (prompt = prompt.replace(/(?<=\n\n(H(?:uman)?|A(?:ssistant)?)):[ ]?/g, '： '));
                     Config.Settings.padtxt && (prompt = padtxt(prompt));
-/****************************************************************/
+/******************************** */
                     Logger?.write(`\n\n-------\n[${(new Date).toLocaleString()}]\n####### PROMPT (${type}):\n${prompt}\n--\n####### REPLY:\n`);
                     retryRegen || (fetchAPI = await (async (signal, model, prompt, temperature, type) => {
                         const attachments = [];
                         if (Config.Settings.PromptExperiments) {
-/****************************************************************/
+/******************************** */
                             let splitedprompt = prompt.split('\n\nPlainPrompt:');
                             prompt = splitedprompt[0];
-/****************************************************************/
+/******************************** */
                             attachments.push({
                                 extracted_content: (prompt),
                                 file_name: 'paste.txt',  //fileName(),
@@ -705,9 +683,9 @@ const updateParams = res => {
                                 file_type: 'txt'  //'text/plain'
                             });
                             prompt = 'r' === type ? Config.PromptExperimentFirst : Config.PromptExperimentNext;
-/****************************************************************/
+/******************************** */
                             splitedprompt.length > 1 && (prompt = prompt + splitedprompt[1]);
-/****************************************************************/
+/******************************** */
                         }
                         let res;
                         const body = {
@@ -782,14 +760,18 @@ const updateParams = res => {
 /******************************** */
                     clewdStream.empty();
                 }
-/******************************** */
-                //if (prevImpersonated) {
-                try {
+                /*if (prevImpersonated) {
                     await deleteChat(Conversation.uuid);
-                } catch (err) { //}
-                    console.log(`[33mdeleteChat failed[0m`);
-                }
-                changer && CookieChanger.emit('ChangeCookie');
+                }*/
+/******************************** */
+                setTimeout(function() {
+                    try {
+                        deleteChat(Conversation.uuid);
+                    } catch (err) {
+                        console.log(`[33mdeleteChat failed[0m`);
+                    }
+                    changer && CookieChanger.emit('ChangeCookie');
+                }, 1000);
 /******************************** */
             }));
         })(req, res);
@@ -806,8 +788,7 @@ const updateParams = res => {
       default:
         !['/', '/v1', '/favicon.ico'].includes(req.url) && (console.log('unknown request: ' + req.url)); //console.log('unknown request: ' + req.url);
         res.writeHead(200, {'Content-Type': 'text/html'});
-        const homepage = `<!DOCTYPE html>\n<html>\n<head>\n<meta charset="utf-8">\n<script>\nfunction copyToClipboard(text) {\n  var textarea = document.createElement("textarea");\n  textarea.textContent = text;\n  textarea.style.position = "fixed";\n  document.body.appendChild(textarea);\n  textarea.select();\n  try {\n    return document.execCommand("copy");\n  } catch (ex) {\n    console.warn("Copy to clipboard failed.", ex);\n    return false;\n  } finally {\n    document.body.removeChild(textarea);\n  }\n}\nfunction copyLink(event) {\n  event.preventDefault();\n  const url = new URL(window.location.href);\n  const link = url.protocol + '//' + url.host + '/v1';\n  copyToClipboard(link);\n  alert('链接已复制: ' + link);\n}\n</script>\n</head>\n<body>\n${Main}<br/><br/>完全开源、免费且禁止商用<br/><br/>反代地址: <a href="v1" onclick="copyLink(event)">点击复制</a><br/><br/>教程与FAQ: <a href="https://rentry.org/teralomaniac_clewd" target="FAQ">https://rentry.org/teralomaniac_clewd</a>\n</body>\n</html>`;
-        res.write(homepage);
+        res.write(`<!DOCTYPE html>\n<html>\n<head>\n<meta charset="utf-8">\n<script>\nfunction copyToClipboard(text) {\n  var textarea = document.createElement("textarea");\n  textarea.textContent = text;\n  textarea.style.position = "fixed";\n  document.body.appendChild(textarea);\n  textarea.select();\n  try {\n    return document.execCommand("copy");\n  } catch (ex) {\n    console.warn("Copy to clipboard failed.", ex);\n    return false;\n  } finally {\n    document.body.removeChild(textarea);\n  }\n}\nfunction copyLink(event) {\n  event.preventDefault();\n  const url = new URL(window.location.href);\n  const link = url.protocol + '//' + url.host + '/v1';\n  copyToClipboard(link);\n  alert('链接已复制: ' + link);\n}\n</script>\n</head>\n<body>\n${Main}<br/><br/>完全开源、免费且禁止商用<br/><br/>反向代理: <a href="v1" onclick="copyLink(event)">点击复制链接</a><br/>填入OpenAI API反向代理并选择OpenAI分类中的claude-2模型（酒馆需打开Show "External" models）<br/><br/>教程与FAQ: <a href="https://rentry.org/teralomaniac_clewd" target="FAQ">https://rentry.org/teralomaniac_clewd</a>\n</body>\n</html>`);
         res.end();
         /*res.json(
             {
